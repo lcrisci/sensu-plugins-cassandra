@@ -66,6 +66,9 @@
 #   for details.
 #
 
+# #YELLOW
+# rubocop:disable AssignmentInCondition
+require 'rubygems' if RUBY_VERSION < '1.9.0'
 require 'sensu-plugin/metric/cli'
 require 'socket'
 
@@ -77,9 +80,6 @@ UNITS_FACTOR = {
   'TB' => 1024**4
 }
 
-#
-# Cassandra Metrics
-#
 class CassandraMetrics < Sensu::Plugin::Metric::CLI::Graphite
   option :hostname,
          short: '-h HOSTNAME',
@@ -92,6 +92,21 @@ class CassandraMetrics < Sensu::Plugin::Metric::CLI::Graphite
          long: '--port PORT',
          description: 'cassandra JMX port',
          default: '7199'
+
+  option :username,
+         short: '-u USERNAME',
+         long: '--username USERNAME',
+         description: 'cassandra JMX username'
+
+  option :password,
+         short: '-p PASSWORD',
+         long: '--password PASSWORD',
+         description: 'cassandra JMX password'
+
+  option :passwordfile,
+         short: '-F PASSWORD-FILE',
+         long: '--password-file PASSWORD-FILE',
+         description: 'cassandra JMX password file'
 
   option :scheme,
          description: 'Metric naming scheme, text to prepend to metric',
@@ -145,7 +160,15 @@ class CassandraMetrics < Sensu::Plugin::Metric::CLI::Graphite
 
   # execute cassandra's nodetool and return output as string
   def nodetool_cmd(cmd)
-    `nodetool -h #{config[:hostname]} -p #{config[:port]} #{cmd}`
+    if config[:username]
+      if config[:passwordfile]
+        `nodetool -h #{config[:hostname]} -u #{config[:username]} -pwf #{config[:passwordfile]} -p #{config[:port]} #{cmd}`
+      elsif config[:password]
+        `nodetool -h #{config[:hostname]} -u #{config[:username]} -pw #{config[:password]} -p #{config[:port]} #{cmd}`
+      end
+    else
+      `nodetool -h #{config[:hostname]} -p #{config[:port]} #{cmd}`
+    end
   end
 
   # nodetool -h localhost info:
@@ -185,36 +208,36 @@ class CassandraMetrics < Sensu::Plugin::Metric::CLI::Graphite
   # According to io/util/FileUtils.java units for load are:
   # TB/GB/MB/KB/bytes
   #
-  def parse_info# rubocop:disable all
+  def parse_info
     info = nodetool_cmd('info')
     # #YELLOW
     info.each_line do |line| # rubocop:disable Style/Next
-      if m = line.match(/^Exceptions\s*:\s+([0-9]+)$/)# rubocop:disable all
+      if m = line.match(/^Exceptions\s*:\s+([0-9]+)$/)
         output "#{config[:scheme]}.exceptions", m[1], @timestamp
       end
 
-      if m = line.match(/^Load\s*:\s+([0-9.]+)\s+([KMGT]B|bytes)$/)# rubocop:disable all
+      if m = line.match(/^Load\s*:\s+([0-9.]+)\s+([KMGT]B|bytes)$/)
         output "#{config[:scheme]}.load", convert_to_bytes(m[1], m[2]), @timestamp
       end
 
-      if m = line.match(/^Uptime[^:]+:\s+(\d+)$/)# rubocop:disable all
+      if m = line.match(/^Uptime[^:]+:\s+(\d+)$/)
         output "#{config[:scheme]}.uptime", m[1], @timestamp
       end
 
-      if m = line.match(/^Heap Memory[^:]+:\s+([0-9.]+)\s+\/\s+([0-9.]+)$/)# rubocop:disable all
+      if m = line.match(/^Heap Memory[^:]+:\s+([0-9.]+)\s+\/\s+([0-9.]+)$/)
         output "#{config[:scheme]}.heap.used", convert_to_bytes(m[1], 'MB'), @timestamp
         output "#{config[:scheme]}.heap.total", convert_to_bytes(m[2], 'MB'), @timestamp
       end
 
       # v1.1+
-      if m = line.match(/^Key Cache[^:]+: size ([0-9]+) \(bytes\), capacity ([0-9]+) \(bytes\), ([0-9]+) hits, ([0-9]+) requests/)# rubocop:disable all
+      if m = line.match(/^Key Cache[^:]+: size ([0-9]+) \(bytes\), capacity ([0-9]+) \(bytes\), ([0-9]+) hits, ([0-9]+) requests/)
         output "#{config[:scheme]}.key_cache.size", m[1], @timestamp
         output "#{config[:scheme]}.key_cache.capacity", m[2], @timestamp
         output "#{config[:scheme]}.key_cache.hits", m[3], @timestamp
         output "#{config[:scheme]}.key_cache.requests", m[4], @timestamp
       end
 
-      if m = line.match(/^Row Cache[^:]+: size ([0-9]+) \(bytes\), capacity ([0-9]+) \(bytes\), ([0-9]+) hits, ([0-9]+) requests/)# rubocop:disable all
+      if m = line.match(/^Row Cache[^:]+: size ([0-9]+) \(bytes\), capacity ([0-9]+) \(bytes\), ([0-9]+) hits, ([0-9]+) requests/)
         output "#{config[:scheme]}.row_cache.size", m[1], @timestamp
         output "#{config[:scheme]}.row_cache.capacity", m[2], @timestamp
         output "#{config[:scheme]}.row_cache.hits", m[3], @timestamp
@@ -247,13 +270,13 @@ class CassandraMetrics < Sensu::Plugin::Metric::CLI::Graphite
   # READ                         0
   # MUTATION                     0
   # REQUEST_RESPONSE             0
-  def parse_tpstats# rubocop:disable all
+  def parse_tpstats
     tpstats = nodetool_cmd('tpstats')
     tpstats.each_line do |line|
       next if line.match(/^Pool Name/)
       next if line.match(/^Message type/)
 
-      if m = line.match(/^(\w+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)$/)# rubocop:disable all
+      if m = line.match(/^(\w+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)$/)
         (thread, active, pending, completed, blocked, _) = m.captures
 
         output "#{config[:scheme]}.threadpool.#{thread}.active", active, @timestamp
@@ -262,7 +285,7 @@ class CassandraMetrics < Sensu::Plugin::Metric::CLI::Graphite
         output "#{config[:scheme]}.threadpool.#{thread}.blocked", blocked, @timestamp
       end
 
-      if m = line.match(/^(\w+)\s+(\d+)$/)# rubocop:disable all
+      if m = line.match(/^(\w+)\s+(\d+)$/)
         (message_type, dropped) = m.captures
         output "#{config[:scheme]}.message_type.#{message_type}.dropped", dropped, @timestamp
       end
@@ -278,13 +301,16 @@ class CassandraMetrics < Sensu::Plugin::Metric::CLI::Graphite
   def parse_compactionstats
     cstats = nodetool_cmd('compactionstats')
     cstats.each_line do |line|
-      if m = line.match(/^pending tasks:\s+([0-9]+)/)# rubocop:disable all
+      if m = line.match(/^pending tasks:\s+([0-9]+)/)
         output "#{config[:scheme]}.compactionstats.pending_tasks", m[1], @timestamp
       end
     end
   end
 
   # nodetool -h localhost cfstats
+  #
+  # Pre v 2.0
+  #
   # Keyspace: system
   #   Read Count: 216
   #   Read Latency: 1.4066805555555557 ms.
@@ -315,10 +341,41 @@ class CassandraMetrics < Sensu::Plugin::Metric::CLI::Graphite
   #     Compacted row maximum size: 0
   #     Compacted row mean size: 0
   #
+  # Post v 2.0
+  #
+  # Keyspace: system
+  #         Read Count: 1806
+  #         Read Latency: 0.47397231450719823 ms.
+  #         Write Count: 77488
+  #         Write Latency: 0.03966830993186042 ms.
+  #         Pending Tasks: 0
+  #                 Table: IndexInfo
+  #                 SSTable count: 0
+  #                 Space used (live), bytes: 0
+  #                 Space used (total), bytes: 0
+  #                 SSTable Compression Ratio: 0.0
+  #                 Number of keys (estimate): 0
+  #                 Memtable cell count: 0
+  #                 Memtable data size, bytes: 0
+  #                 Memtable switch count: 0
+  #                 Local read count: 0
+  #                 Local read latency: 0.000 ms
+  #                 Local write count: 0
+  #                 Local write latency: 0.000 ms
+  #                 Pending tasks: 0
+  #                 Bloom filter false positives: 0
+  #                 Bloom filter false ratio: 0.00000
+  #                 Bloom filter space used, bytes: 0
+  #                 Compacted partition minimum bytes: 0
+  #                 Compacted partition maximum bytes: 0
+  #                 Compacted partition mean bytes: 0
+  #                 Average live cells per slice (last five minutes): 0.0
+  #                 Average tombstones per slice (last five minutes): 0.0
+  #
   # some notes on parsing cfstats output:
-  # - a line preceeded by 1 tab contains keyspace metrics
-  # - a line preceeded by 2 tabs contains column family metrics
-  def parse_cfstats# rubocop:disable all
+  # - a line preceded by 1 tab contains keyspace metrics
+  # - a line preceded by 2 tabs contains column family metrics
+  def parse_cfstats
     def get_metric(string)
       string.strip!
       (metric, value) = string.split(': ')
@@ -331,7 +388,7 @@ class CassandraMetrics < Sensu::Plugin::Metric::CLI::Graphite
         metric.gsub!(/[_]{2,}/, '_')       # convert sequence of multiple _'s to single _
         metric.downcase!
         # sanitize metric values for graphite. Numbers only, please.
-        value = value.chomp(' ms.').gsub(/([0-9.]+)$/, '\1')
+        value = value.gsub(/([0-9.]+) \w.*$/, '\1')
       end
       [metric, value]
     end
@@ -343,10 +400,10 @@ class CassandraMetrics < Sensu::Plugin::Metric::CLI::Graphite
 
     cfstats.each_line do |line|
       num_indents = line.count("\t")
-      if m = line.match(/^Keyspace:\s+(\w+)$/)# rubocop:disable all
+      if m = line.match(/^Keyspace:\s+(\w+)$/)
         keyspace = m[1]
-      elsif m = line.match(/\t\tColumn Family[^:]*:\s+(\w+)$/)# rubocop:disable all
-        cf = m[1]
+      elsif m = line.match(/\t\t(Column Family|Table)[^:]*:\s+(\w+)$/)
+        cf = m[2]
       elsif num_indents == 0
         # keyspace = nil
         cf = nil
@@ -368,7 +425,7 @@ class CassandraMetrics < Sensu::Plugin::Metric::CLI::Graphite
     end
   end
 
-  def run# rubocop:disable all
+  def run
     @timestamp = Time.now.to_i
 
     parse_info    if config[:info]
